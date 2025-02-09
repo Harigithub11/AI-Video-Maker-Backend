@@ -1,0 +1,13 @@
+# Ignore virtual environments
+venv/
+coqui_env/
+__pycache__/
+
+# Ignore large files
+*.mp4
+*.wav
+*.mp3
+*.log
+*.zip
+cache/
+node_modules/
