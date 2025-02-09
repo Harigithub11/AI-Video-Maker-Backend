@@ -55,7 +55,7 @@ FREESOUND_API_KEY = "YG213ZwV2kJwHtcXAfs3Ik6s0lTJzjwI45WnFA23"
 MODEL_FILES = {
     "tacotron2_DDC.pth": "17XArguEHT4BD84VQt_S-W5KdE_CyzIiP",
     "vits_model.pth": "14EzYU1_scEItpxO4_IAk6g1_IMSO7t6-",
-    "hifigan_v2.pth": "1zczblXaqeJedU2Dx-_uEnhg7BTOzMLt",
+    "hifigan_v2.pth": "1R_FCiBo_E1N1xvrqf15wyBcWGFOtiRou", 
 }
 
 # Function to download models if they don't exist
