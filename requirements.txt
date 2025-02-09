@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+aiohttp
+asyncio
+pypdf
+python-docx
+nltk
+TTS
+ffmpeg-python
