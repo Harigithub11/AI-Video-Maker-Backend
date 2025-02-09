@@ -1,22 +1,20 @@
 import os
 import aiohttp
 import asyncio
-import subprocess
 import logging
 import hashlib
 from collections import Counter
-from typing import Optional
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from pypdf import PdfReader
 from docx import Document
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from TTS.api import TTS
 import nltk
-import gdown  # For downloading models from Google Drive
+import gdown
+import uvicorn
 
 # Download necessary NLTK data
 nltk.download("punkt", quiet=True)
@@ -24,8 +22,6 @@ nltk.download("stopwords", quiet=True)
 
 # Initialize FastAPI app
 app = FastAPI()
-
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 
 # Enable CORS
@@ -37,15 +33,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Directories
-UPLOAD_DIR = "data"
-AUDIO_DIR = "audio"
-VIDEO_DIR = "public/videos"
-CACHE_DIR = "cache"
-MODEL_DIR = "models"  # Directory to store TTS models
+# Directories (Using Railway Volume for persistence)
+BASE_DIR = "/data"
+MODEL_DIR = os.path.join(BASE_DIR, "models")
+UPLOAD_DIR = os.path.join(BASE_DIR, "data")
+AUDIO_DIR = os.path.join(BASE_DIR, "audio")
+VIDEO_DIR = os.path.join(BASE_DIR, "videos")
+CACHE_DIR = os.path.join(BASE_DIR, "cache")
 
-# Ensure directories exist
-for directory in [UPLOAD_DIR, AUDIO_DIR, VIDEO_DIR, CACHE_DIR, MODEL_DIR]:
+for directory in [MODEL_DIR, UPLOAD_DIR, AUDIO_DIR, VIDEO_DIR, CACHE_DIR]:
     os.makedirs(directory, exist_ok=True)
 
 # API Keys
@@ -59,33 +55,30 @@ MODEL_FILES = {
     "hifigan_v2.pth": "1R_FCiBo_E1N1xvrqf15wyBcWGFOtiRou",
 }
 
-# Function to download models if they don't exist
+# Download models only if they don't exist
 def download_models():
     for filename, file_id in MODEL_FILES.items():
         model_path = os.path.join(MODEL_DIR, filename)
         if os.path.exists(model_path):
-            logging.info(f"{filename} already exists, skipping download.")
-            continue  # Skip downloading again
-
-        logging.info(f"Downloading {filename} from Google Drive...")
+            logging.info(f"✅ {filename} already exists, skipping download.")
+            continue
+        logging.info(f"⬇️ Downloading {filename} from Google Drive...")
         gdown.download(f"https://drive.google.com/uc?id={file_id}", model_path, quiet=False)
-        logging.info(f"{filename} downloaded successfully!")
+        logging.info(f"✅ {filename} downloaded successfully!")
 
-# Ensure models are available before initializing TTS
+# Ensure models exist before running TTS
 download_models()
-
-# Load Coqui TTS Model
 coqui_tts = TTS("tts_models/en/ljspeech/tacotron2-DDC", progress_bar=False)
 
-# Function to generate cache paths
+# Utility function to generate cache paths
 def get_cache_path(key, directory):
     return os.path.join(directory, hashlib.md5(key.encode()).hexdigest())
 
-# Caching mechanism for downloads
+# Download and cache files
 async def cached_download(url, directory):
     cache_path = get_cache_path(url, directory)
     if os.path.exists(cache_path):
-        logging.info(f"Using cached file: {cache_path}")
+        logging.info(f"✅ Using cached file: {cache_path}")
         return cache_path
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
@@ -94,7 +87,7 @@ async def cached_download(url, directory):
                 with open(cache_path, "wb") as f:
                     f.write(content)
                 return cache_path
-            logging.error(f"Failed to download {url} - Status {response.status}")
+            logging.error(f"❌ Failed to download {url} - Status {response.status}")
     return None
 
 # Extract text from files
@@ -107,7 +100,7 @@ def extract_text(file_path):
         return "\n".join(para.text for para in doc.paragraphs if para.text.strip())
     return "No readable text found."
 
-# Extract keywords from text
+# Extract keywords
 def extract_keywords(text, num_keywords=3):
     words = word_tokenize(text.lower())
     stop_words = set(stopwords.words("english"))
@@ -146,14 +139,14 @@ def text_to_speech(text, filename="output.wav"):
 
 @app.post("/generate_video/")
 async def generate_video(text: str = Form(None), file: UploadFile = File(None)):
-    logging.info("Starting video generation process")
+    logging.info("🎬 Starting video generation process")
 
     if file:
         file_path = os.path.join(UPLOAD_DIR, file.filename)
         with open(file_path, "wb") as buffer:
             buffer.write(await file.read())
         text = extract_text(file_path)
-        logging.info(f"Extracted text from file: {file.filename}")
+        logging.info(f"📄 Extracted text from {file.filename}")
 
     if not text:
         return JSONResponse(content={"error": "No text provided"}, status_code=400)
@@ -179,11 +172,7 @@ async def generate_video(text: str = Form(None), file: UploadFile = File(None)):
 
 @app.get("/")
 def root():
-    return {"message": "API is running successfully!"}
+    return {"message": "🚀 API is running successfully!"}
 
-# ✅ Ensure FastAPI runs correctly on Railway
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
-    logging.info(f"🚀 Starting FastAPI server on port {port}")
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
