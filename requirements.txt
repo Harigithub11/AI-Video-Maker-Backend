@@ -8,3 +8,4 @@ python-docx
 nltk
 TTS==0.10.0  # Ensure a version that works with Python 3.9
 ffmpeg-python
+gdown
