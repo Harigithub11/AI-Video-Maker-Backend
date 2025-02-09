@@ -16,6 +16,7 @@ from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from TTS.api import TTS
 import nltk
+import gdown  # For downloading models from Google Drive
 
 # Download necessary NLTK data
 nltk.download("punkt", quiet=True)
@@ -41,6 +42,8 @@ UPLOAD_DIR = "data"
 AUDIO_DIR = "audio"
 VIDEO_DIR = "public/videos"
 CACHE_DIR = "cache"
+MODEL_DIR = "models"  # Directory to store TTS models
+os.makedirs(MODEL_DIR, exist_ok=True)
 for directory in [UPLOAD_DIR, AUDIO_DIR, VIDEO_DIR, CACHE_DIR]:
     os.makedirs(directory, exist_ok=True)
 
@@ -48,11 +51,35 @@ for directory in [UPLOAD_DIR, AUDIO_DIR, VIDEO_DIR, CACHE_DIR]:
 PIXABAY_API_KEY = "48738698-6ae327a6f8a04d813fa6c6101"
 FREESOUND_API_KEY = "YG213ZwV2kJwHtcXAfs3Ik6s0lTJzjwI45WnFA23"
 
-# Load Coqui TTS Model
-MODEL_NAME = "tts_models/en/ljspeech/tacotron2-DDC"
-coqui_tts = TTS(MODEL_NAME)
+# Google Drive Model File IDs
+MODEL_FILES = {
+    "tacotron2_DDC.pth": "17XArguEHT4BD84VQt_S-W5KdE_CyzIiP",
+    "vits_model.pth": "14EzYU1_scEItpxO4_IAk6g1_IMSO7t6-",
+    "hifigan_v2.pth": "1zczblXaqeJedU2Dx-_uEnhg7BTOzMLt",
+}
 
-# Generate cache paths
+# Function to download models if they don't exist
+def download_models():
+    for filename, file_id in MODEL_FILES.items():
+        model_path = os.path.join(MODEL_DIR, filename)
+        if not os.path.exists(model_path):
+            logging.info(f"Downloading {filename} from Google Drive...")
+            gdown.download(f"https://drive.google.com/uc?id={file_id}", model_path, quiet=False)
+            logging.info(f"{filename} downloaded successfully!")
+        else:
+            logging.info(f"{filename} already exists, skipping download.")
+
+# Ensure models are available before initializing TTS
+download_models()
+
+# Load Coqui TTS Model
+MODEL_PATH = os.path.join(MODEL_DIR, "tacotron2_DDC.pth")  # Path to Tacotron2 Model
+if not os.path.exists(MODEL_PATH):
+    logging.error("TTS model file missing! Exiting...")
+    exit(1)
+coqui_tts = TTS("tts_models/en/ljspeech/tacotron2-DDC", progress_bar=False)
+
+# Function to generate cache paths
 def get_cache_path(key, directory):
     return os.path.join(directory, hashlib.md5(key.encode()).hexdigest())
 
@@ -105,33 +132,18 @@ async def fetch_video(keyword):
     videos = await fetch_media(keyword, PIXABAY_API_KEY, "https://pixabay.com/api/videos/", {"per_page": 3})
     return videos[0]["videos"]["medium"]["url"] if videos else None
 
-# Fetch background audio from Freesound (Improved with better error handling)
+# Fetch background audio from Freesound
 async def fetch_background_audio(keyword):
     url = f"https://freesound.org/apiv2/search/text/?query={keyword}&token={FREESOUND_API_KEY}&fields=previews"
-    
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
             if response.status != 200:
                 logging.error(f"Freesound API request failed with status {response.status}")
                 return None
-            
             try:
                 data = await response.json()
                 sounds = data.get("results", [])
-                
-                if not sounds:
-                    logging.warning(f"No background audio found for keyword: {keyword}")
-                    return None
-                
-                for sound in sounds:
-                    preview = sound.get("previews", {}).get("preview-hq-mp3")
-                    if preview:
-                        logging.info(f"Found background audio: {preview}")
-                        return preview
-                
-                logging.warning(f"No suitable audio preview found for keyword: {keyword}")
-                return None
-            
+                return sounds[0]["previews"]["preview-hq-mp3"] if sounds else None
             except Exception as e:
                 logging.error(f"Error parsing Freesound API response: {str(e)}")
                 return None
@@ -172,25 +184,13 @@ async def generate_video(text: str = Form(None), file: UploadFile = File(None)):
     if not video_url or not audio_url:
         return JSONResponse(content={"error": "Could not find video or background audio"}, status_code=500)
 
-    logging.info(f"Found video URL: {video_url}")
-    logging.info(f"Found audio URL: {audio_url}")
-    
     video_path, background_audio_path, speech_audio_path = await asyncio.gather(
         cached_download(video_url, VIDEO_DIR),
         cached_download(audio_url, AUDIO_DIR),
         asyncio.to_thread(text_to_speech, text)
     )
 
-    output_video = os.path.join(VIDEO_DIR, "output.mp4")
-    cmd = [
-        "ffmpeg", "-y", "-i", video_path, "-i", speech_audio_path, "-i", background_audio_path,
-        "-filter_complex", "[1:a][2:a]amix=inputs=2:duration=first:weights=4 1[aout]",
-        "-map", "0:v", "-map", "[aout]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k", "-shortest", output_video
-    ]
-
-    await asyncio.create_subprocess_exec(*cmd)
-    return FileResponse(output_video, media_type="video/mp4", filename="output.mp4")
+    return FileResponse(video_path, media_type="video/mp4", filename="output.mp4")
 
 @app.get("/")
 def root():
