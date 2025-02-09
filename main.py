@@ -43,8 +43,9 @@ AUDIO_DIR = "audio"
 VIDEO_DIR = "public/videos"
 CACHE_DIR = "cache"
 MODEL_DIR = "models"  # Directory to store TTS models
-os.makedirs(MODEL_DIR, exist_ok=True)
-for directory in [UPLOAD_DIR, AUDIO_DIR, VIDEO_DIR, CACHE_DIR]:
+
+# Ensure directories exist
+for directory in [UPLOAD_DIR, AUDIO_DIR, VIDEO_DIR, CACHE_DIR, MODEL_DIR]:
     os.makedirs(directory, exist_ok=True)
 
 # API Keys
@@ -55,28 +56,25 @@ FREESOUND_API_KEY = "YG213ZwV2kJwHtcXAfs3Ik6s0lTJzjwI45WnFA23"
 MODEL_FILES = {
     "tacotron2_DDC.pth": "17XArguEHT4BD84VQt_S-W5KdE_CyzIiP",
     "vits_model.pth": "14EzYU1_scEItpxO4_IAk6g1_IMSO7t6-",
-    "hifigan_v2.pth": "1R_FCiBo_E1N1xvrqf15wyBcWGFOtiRou", 
+    "hifigan_v2.pth": "1R_FCiBo_E1N1xvrqf15wyBcWGFOtiRou",
 }
 
 # Function to download models if they don't exist
 def download_models():
     for filename, file_id in MODEL_FILES.items():
         model_path = os.path.join(MODEL_DIR, filename)
-        if not os.path.exists(model_path):
-            logging.info(f"Downloading {filename} from Google Drive...")
-            gdown.download(f"https://drive.google.com/uc?id={file_id}", model_path, quiet=False)
-            logging.info(f"{filename} downloaded successfully!")
-        else:
+        if os.path.exists(model_path):
             logging.info(f"{filename} already exists, skipping download.")
+            continue  # Skip downloading again
+
+        logging.info(f"Downloading {filename} from Google Drive...")
+        gdown.download(f"https://drive.google.com/uc?id={file_id}", model_path, quiet=False)
+        logging.info(f"{filename} downloaded successfully!")
 
 # Ensure models are available before initializing TTS
 download_models()
 
 # Load Coqui TTS Model
-MODEL_PATH = os.path.join(MODEL_DIR, "tacotron2_DDC.pth")  # Path to Tacotron2 Model
-if not os.path.exists(MODEL_PATH):
-    logging.error("TTS model file missing! Exiting...")
-    exit(1)
 coqui_tts = TTS("tts_models/en/ljspeech/tacotron2-DDC", progress_bar=False)
 
 # Function to generate cache paths
@@ -96,8 +94,7 @@ async def cached_download(url, directory):
                 with open(cache_path, "wb") as f:
                     f.write(content)
                 return cache_path
-            else:
-                logging.error(f"Failed to download {url} - Status {response.status}")
+            logging.error(f"Failed to download {url} - Status {response.status}")
     return None
 
 # Extract text from files
@@ -117,36 +114,27 @@ def extract_keywords(text, num_keywords=3):
     filtered_words = [word for word in words if word.isalnum() and word not in stop_words]
     return [word for word, _ in Counter(filtered_words).most_common(num_keywords)]
 
-# Fetch media (generic function)
-async def fetch_media(keyword, api_key, base_url, params):
-    url = f"{base_url}?key={api_key}&q={keyword}&" + "&".join(f"{k}={v}" for k, v in params.items())
+# Fetch video from Pixabay
+async def fetch_video(keyword):
+    url = f"https://pixabay.com/api/videos/?key={PIXABAY_API_KEY}&q={keyword}&per_page=3"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
             if response.status == 200:
                 data = await response.json()
-                return data.get("hits", [])
-    return []
-
-# Fetch video from Pixabay
-async def fetch_video(keyword):
-    videos = await fetch_media(keyword, PIXABAY_API_KEY, "https://pixabay.com/api/videos/", {"per_page": 3})
-    return videos[0]["videos"]["medium"]["url"] if videos else None
+                videos = data.get("hits", [])
+                return videos[0]["videos"]["medium"]["url"] if videos else None
+    return None
 
 # Fetch background audio from Freesound
 async def fetch_background_audio(keyword):
     url = f"https://freesound.org/apiv2/search/text/?query={keyword}&token={FREESOUND_API_KEY}&fields=previews"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
-            if response.status != 200:
-                logging.error(f"Freesound API request failed with status {response.status}")
-                return None
-            try:
+            if response.status == 200:
                 data = await response.json()
                 sounds = data.get("results", [])
                 return sounds[0]["previews"]["preview-hq-mp3"] if sounds else None
-            except Exception as e:
-                logging.error(f"Error parsing Freesound API response: {str(e)}")
-                return None
+    return None
 
 # Convert text to speech with caching
 def text_to_speech(text, filename="output.wav"):
@@ -159,28 +147,25 @@ def text_to_speech(text, filename="output.wav"):
 @app.post("/generate_video/")
 async def generate_video(text: str = Form(None), file: UploadFile = File(None)):
     logging.info("Starting video generation process")
-    
+
     if file:
         file_path = os.path.join(UPLOAD_DIR, file.filename)
         with open(file_path, "wb") as buffer:
             buffer.write(await file.read())
         text = extract_text(file_path)
         logging.info(f"Extracted text from file: {file.filename}")
-    
+
     if not text:
-        logging.error("No text provided")
         return JSONResponse(content={"error": "No text provided"}, status_code=400)
-    
+
     keywords = extract_keywords(text)
-    logging.info(f"Extracted keywords: {keywords}")
-    
     video_url, audio_url = None, None
     for keyword in keywords:
         video_url = video_url or await fetch_video(keyword)
         audio_url = audio_url or await fetch_background_audio(keyword)
         if video_url and audio_url:
             break
-    
+
     if not video_url or not audio_url:
         return JSONResponse(content={"error": "Could not find video or background audio"}, status_code=500)
 
@@ -195,3 +180,10 @@ async def generate_video(text: str = Form(None), file: UploadFile = File(None)):
 @app.get("/")
 def root():
     return {"message": "API is running successfully!"}
+
+# ✅ Ensure FastAPI runs correctly on Railway
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8000))
+    logging.info(f"🚀 Starting FastAPI server on port {port}")
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=port)
