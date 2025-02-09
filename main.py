@@ -20,18 +20,8 @@ import uvicorn
 nltk.download("punkt", quiet=True)
 nltk.download("stopwords", quiet=True)
 
-# Initialize FastAPI app
-app = FastAPI()
+# Initialize logging
 logging.basicConfig(level=logging.INFO)
-
-# Enable CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Directories (Using Railway Volume for persistence)
 BASE_DIR = "/data"
@@ -55,8 +45,15 @@ MODEL_FILES = {
     "hifigan_v2.pth": "1R_FCiBo_E1N1xvrqf15wyBcWGFOtiRou",
 }
 
+# Global variable to track if models have been checked
+models_checked = False
+
 # Download models only if they don't exist
 def download_models():
+    global models_checked
+    if models_checked:
+        return
+
     for filename, file_id in MODEL_FILES.items():
         model_path = os.path.join(MODEL_DIR, filename)
         if os.path.exists(model_path):
@@ -65,10 +62,24 @@ def download_models():
         logging.info(f"⬇️ Downloading {filename} from Google Drive...")
         gdown.download(f"https://drive.google.com/uc?id={file_id}", model_path, quiet=False)
         logging.info(f"✅ {filename} downloaded successfully!")
+    
+    models_checked = True
 
 # Ensure models exist before running TTS
 download_models()
 coqui_tts = TTS("tts_models/en/ljspeech/tacotron2-DDC", progress_bar=False)
+
+# Initialize FastAPI app
+app = FastAPI()
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Utility function to generate cache paths
 def get_cache_path(key, directory):
@@ -176,3 +187,4 @@ def root():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
